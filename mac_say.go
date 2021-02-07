@@ -6,19 +6,24 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
-var mac macSayVoices
+var mac *macSayVoices
 
 func MacSayVoices() Voices {
-	return &mac
+	if mac == nil {
+		mac = &macSayVoices{}
+	}
+	return mac
 }
 
 type macSayVoices struct {
 	voices []Voice
 }
 
-func (m *macSayVoices) Voices(opts ...VoicesOpt) ([]Voice, error) {
+func (m *macSayVoices) Voices(opts ...Opt) ([]Voice, error) {
 	vs, err := m.getVoices()
 	if err != nil {
 		return nil, err
@@ -71,7 +76,7 @@ func (m *macSayVoices) getVoices() ([]Voice, error) {
 		detail := string(bytes.TrimPrefix(bytes.TrimSpace(row[i:]), []byte("# ")))
 		voice := macSay{
 			name:     name,
-			language: language,
+			language: strings.ReplaceAll(language, "_", "-"),
 			detail:   detail,
 		}
 		voices = append(voices, voice)
@@ -98,22 +103,43 @@ func (m macSay) Detail() string {
 	return m.detail
 }
 
-func (m macSay) Say(ctx context.Context, word string) error {
-	return executive(ctx, "say", "-v", m.name, word)
-}
+func (m macSay) sayToFile(ctx context.Context, word string) (string, error) {
+	word = clean(word)
 
-func (m macSay) SayToFile(ctx context.Context, file string, word string) error {
+	file := filepath.Join(cacheDir, "mac_say", m.Name(), hashName(word)+".mp3")
+	os.MkdirAll(filepath.Dir(file), 0755)
+	info, err := os.Stat(file)
+	if err == nil && info.Size() != 0 {
+		return file, nil
+	}
+
 	tmp := file + ".aac"
-	err := executive(ctx, "say", "-o", tmp, "-v", m.name, word)
+	err = executive(ctx, "say", "-o", tmp, "-v", m.name, word)
 	if err != nil {
-		return err
+		return "", err
 	}
 	err = ToMp3(ctx, tmp, file)
 	if err != nil {
-		return err
+		return "", err
 	}
 	os.Remove(tmp)
-	return nil
+	return file, nil
+}
+
+func (m macSay) SayToFile(ctx context.Context, file string, word string) error {
+	f, err := m.sayToFile(ctx, word)
+	if err != nil {
+		return err
+	}
+	return os.Link(f, file)
+}
+
+func (m macSay) Say(ctx context.Context, word string) error {
+	f, err := m.sayToFile(ctx, word)
+	if err != nil {
+		return err
+	}
+	return PlayMp3FromFile(f)
 }
 
 func (m macSay) String() string {

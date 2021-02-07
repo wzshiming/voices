@@ -5,7 +5,7 @@ import (
 )
 
 type Voices interface {
-	Voices(opts ...VoicesOpt) ([]Voice, error)
+	Voices(opts ...Opt) ([]Voice, error)
 }
 
 type Voice interface {
@@ -16,7 +16,7 @@ type Voice interface {
 	SayToFile(ctx context.Context, file string, word string) error
 }
 
-type VoicesOpt func(opt *voicesOpt)
+type Opt func(opt *voicesOpt)
 
 func VoiceName(name string) func(opt *voicesOpt) {
 	return func(opt *voicesOpt) {
@@ -35,7 +35,7 @@ type voicesOpt struct {
 	Language string
 }
 
-func (o *voicesOpt) parse(opts []VoicesOpt) {
+func (o *voicesOpt) parse(opts []Opt) {
 	for _, opt := range opts {
 		if opt == nil {
 			continue
