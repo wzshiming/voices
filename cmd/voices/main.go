@@ -9,7 +9,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	flag "github.com/spf13/pflag"
 	"github.com/wzshiming/voices"
@@ -45,7 +44,7 @@ func main() {
 		return
 	}
 
-	ctx, _ := context.WithDeadline(context.Background(), time.Now().Add(time.Second*5))
+	ctx := context.Background()
 	var voiceSay voices.Voice
 	for _, item := range list {
 		vs, err := item.Voices(voices.VoiceName(voice))

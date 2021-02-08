@@ -147,19 +147,19 @@ func (m *bingSay) sayReader(ctx context.Context, word string) (io.ReadCloser, er
 
 func (m bingSay) sayToFile(ctx context.Context, word string) (string, error) {
 	word = clean(word)
-	r, err := m.sayReader(ctx, word)
-	if err != nil {
-		return "", err
-	}
-	defer r.Close()
-
-	word = clean(word)
 	file := filepath.Join(cacheDir, "bing", m.Name(), hashName(word)+".mp3")
 	os.MkdirAll(filepath.Dir(file), 0755)
 	info, err := os.Stat(file)
 	if err == nil && info.Size() != 0 {
 		return file, nil
 	}
+
+	r, err := m.sayReader(ctx, word)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+
 	tmp := file + ".tmp"
 
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
@@ -195,7 +195,7 @@ func (m bingSay) Say(ctx context.Context, word string) error {
 	if err != nil {
 		return err
 	}
-	return PlayMp3FromFile(f)
+	return PlayMp3(ctx, f)
 }
 
 func (m bingSay) String() string {

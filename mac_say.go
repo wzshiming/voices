@@ -105,7 +105,6 @@ func (m macSay) Detail() string {
 
 func (m macSay) sayToFile(ctx context.Context, word string) (string, error) {
 	word = clean(word)
-
 	file := filepath.Join(cacheDir, "mac_say", m.Name(), hashName(word)+".mp3")
 	os.MkdirAll(filepath.Dir(file), 0755)
 	info, err := os.Stat(file)
@@ -139,7 +138,7 @@ func (m macSay) Say(ctx context.Context, word string) error {
 	if err != nil {
 		return err
 	}
-	return PlayMp3FromFile(f)
+	return PlayMp3(ctx, f)
 }
 
 func (m macSay) String() string {
