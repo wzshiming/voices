@@ -5,10 +5,14 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
-var cacheDir = ".voices"
+var (
+	cacheDir = ".voices"
+	space    = regexp.MustCompile(`\s+`)
+)
 
 func init() {
 	home, _ := os.UserHomeDir()
@@ -18,9 +22,8 @@ func init() {
 }
 
 func clean(text string) string {
-	text = strings.ReplaceAll(text, "\t", " ")
-	text = strings.ReplaceAll(text, "(", " ")
-	text = strings.ReplaceAll(text, ")", " ")
+	text = strings.TrimSpace(text)
+	text = space.ReplaceAllString(text, " ")
 	return text
 }
 

@@ -1,10 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"sort"
@@ -18,13 +19,13 @@ var (
 	list  = []voices.Voices{voices.BingSayVoices(), voices.MacSayVoices()}
 	voice string
 	out   string
-	files []string
+	file  string
 )
 
 func init() {
 	flag.StringVarP(&voice, "voice", "v", voice, "voice")
 	flag.StringVarP(&out, "out", "o", out, "out")
-	flag.StringSliceVarP(&files, "file", "f", files, "file")
+	flag.StringVarP(&file, "file", "f", file, "file")
 	flag.Usage = func() {
 		w := os.Stderr
 		fmt.Fprintf(w, "Voices:\n")
@@ -38,7 +39,6 @@ func init() {
 }
 
 func main() {
-
 	if voice == "" {
 		flag.Usage()
 		return
@@ -58,55 +58,127 @@ func main() {
 		}
 	}
 	if voiceSay == nil {
-		log.Println("not found")
+		log.Printf("not found %q", voice)
 		return
 	}
 
-	text := []byte{}
-	args := flag.Args()
-	if len(args) != 0 {
-		text = []byte(strings.Join(args, " "))
-		text = append(text, '\n')
+	if out != "" {
+		save(ctx, voiceSay, file, out)
+	} else {
+		say(ctx, voiceSay, file)
 	}
-	for _, file := range files {
-		body, err := openFile(file)
-		if err != nil {
-			log.Println(err)
-			continue
+}
+
+func say(ctx context.Context, voiceSay voices.Voice, file string) {
+	content, err := openFile(file)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	saysCh := make(chan string, 1)
+	cacheCh := make(chan string, 1)
+
+	go func() {
+		defer close(saysCh)
+		for text := range cacheCh {
+			if text != "" {
+				_, err := voiceSay.Cache(ctx, text)
+				if err != nil {
+					log.Println(err)
+				}
+			}
+			saysCh <- text
 		}
-		text = append(text, body...)
-		text = append(text, '\n')
+	}()
+
+	// Read content
+	go func() {
+		defer func() {
+			content.Close()
+			close(cacheCh)
+		}()
+		reader := bufio.NewReader(content)
+		for {
+			line, _, err := reader.ReadLine()
+			if err != nil {
+				if err != io.EOF {
+					log.Println(err)
+				}
+				return
+			}
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				cacheCh <- ""
+			} else {
+				cacheCh <- string(line)
+			}
+		}
+	}()
+
+	index := 0
+	for text := range saysCh {
+		index++
+		log.Printf("%d. %s", index, text)
+		if text != "" {
+			err := voiceSay.Say(ctx, text)
+			if err != nil {
+				log.Println(err)
+			}
+		}
 	}
+}
+
+func save(ctx context.Context, voiceSay voices.Voice, file string, out string) {
+	content, err := openFile(file)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	text, err := io.ReadAll(content)
+	if err != nil {
+		content.Close()
+		log.Println(err)
+		return
+	}
+	content.Close()
+
 	text = bytes.TrimSpace(text)
 	if len(text) == 0 {
 		return
 	}
 
-	if out == "" {
-		err := voiceSay.Say(ctx, string(text))
-		if err != nil {
-			log.Println(err)
-			return
-		}
-	} else {
-		err := voiceSay.SayToFile(ctx, out, string(text))
-		if err != nil {
-			log.Println(err)
-			return
-		}
+	f, err := voiceSay.Cache(ctx, string(text))
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	err = os.Link(f, out)
+	if err != nil {
+		log.Println(err)
+		return
 	}
 }
 
-func openFile(file string) ([]byte, error) {
+func openFile(file string) (io.ReadCloser, error) {
+	if file == "" {
+		text := []byte{}
+		args := flag.Args()
+		if len(args) != 0 {
+			text = []byte(strings.Join(args, " "))
+			text = append(text, '\n')
+		}
+		return io.NopCloser(bytes.NewBuffer(text)), nil
+	}
 	if file == "-" {
-		return ioutil.ReadAll(os.Stdin)
+		return os.Stdin, nil
 	}
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	return ioutil.ReadAll(f)
+	return f, nil
 }
 
 func helpful() {

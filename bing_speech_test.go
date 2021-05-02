@@ -14,7 +14,7 @@ func TestBingSayVoices(t *testing.T) {
 
 	for _, voice := range voices {
 		t.Log(voice)
-		err = voice.Say(context.Background(), voice.Detail())
+		err = voice.Say(context.Background(), "臭猪臭猪")
 		if err != nil {
 			t.Fatal(err)
 		}

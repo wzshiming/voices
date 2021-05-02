@@ -1,7 +1,6 @@
 package voices
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -140,12 +139,12 @@ func (m *bingSay) sayReader(ctx context.Context, word string) (io.ReadCloser, er
 		io.Reader
 		io.Closer
 	}{
-		Reader: bufio.NewReaderSize(&bingStream{Ctx: ctx, Reader: conn}, 64*1024),
+		Reader: newBindStream(ctx, conn),
 		Closer: conn,
 	}, nil
 }
 
-func (m bingSay) sayToFile(ctx context.Context, word string) (string, error) {
+func (m bingSay) cache(ctx context.Context, word string) (string, error) {
 	word = clean(word)
 	file := filepath.Join(cacheDir, "bing", m.Name(), hashName(word)+".mp3")
 	os.MkdirAll(filepath.Dir(file), 0755)
@@ -166,11 +165,17 @@ func (m bingSay) sayToFile(ctx context.Context, word string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() {
+		f.Close()
+		os.Remove(tmp)
+	}()
 
-	_, err = io.Copy(f, r)
+	n, err := io.Copy(f, r)
 	if err != nil {
 		return "", err
+	}
+	if n == 0 {
+		return "", fmt.Errorf("can't read the respone body")
 	}
 
 	err = ToMp3(ctx, tmp, file)
@@ -178,20 +183,15 @@ func (m bingSay) sayToFile(ctx context.Context, word string) (string, error) {
 		return "", err
 	}
 
-	os.Remove(tmp)
 	return file, nil
 }
 
-func (m bingSay) SayToFile(ctx context.Context, file string, word string) error {
-	f, err := m.sayToFile(ctx, word)
-	if err != nil {
-		return err
-	}
-	return os.Link(f, file)
+func (m bingSay) Cache(ctx context.Context, word string) (string, error) {
+	return m.cache(ctx, word)
 }
 
 func (m bingSay) Say(ctx context.Context, word string) error {
-	f, err := m.sayToFile(ctx, word)
+	f, err := m.cache(ctx, word)
 	if err != nil {
 		return err
 	}
@@ -213,31 +213,39 @@ type bingSayItem struct {
 }
 
 type bingStream struct {
-	Ctx    context.Context
-	Reader io.Reader
+	ctx context.Context
+	r   io.Reader
+}
+
+func newBindStream(ctx context.Context, r io.Reader) io.Reader {
+	return &bingStream{
+		ctx: ctx,
+		r:   r,
+	}
 }
 
 func (b *bingStream) Read(p []byte) (n int, err error) {
-	err = b.Ctx.Err()
+	err = b.ctx.Err()
 	if err != nil {
 		return 0, err
 	}
-	i, err := b.Reader.Read(p)
+	n, err = b.r.Read(p)
 	if err != nil {
 		return 0, err
 	}
-	sl := []byte("Path:audio\r\n")
-	tmp := p[:i]
-	i = bytes.Index(tmp, sl)
-	if i == -1 {
-		el := []byte("Path:turn.end\r\n")
-		i = bytes.Index(tmp, el)
-		if i != -1 {
+	if n > 2 && p[0] == 0 {
+		o := p[:n]
+		if o[1] == 128 {
+			if bytes.Contains(o, []byte("Content-Type:audio/mpeg\r\n")) {
+				sl := []byte("Path:audio\r\n")
+				i := bytes.Index(o, sl)
+				tmp := o[i+len(sl) : n]
+				n = copy(o, tmp)
+				return n, nil
+			}
+		} else if o[1] == 103 {
 			return 0, io.EOF
 		}
-		return b.Read(p)
 	}
-	tmp = tmp[i+len(sl):]
-	n = copy(p, tmp)
-	return n, nil
+	return b.Read(p)
 }

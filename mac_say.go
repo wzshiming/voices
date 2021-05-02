@@ -103,7 +103,7 @@ func (m macSay) Detail() string {
 	return m.detail
 }
 
-func (m macSay) sayToFile(ctx context.Context, word string) (string, error) {
+func (m macSay) cache(ctx context.Context, word string) (string, error) {
 	word = clean(word)
 	file := filepath.Join(cacheDir, "mac_say", m.Name(), hashName(word)+".mp3")
 	os.MkdirAll(filepath.Dir(file), 0755)
@@ -117,24 +117,21 @@ func (m macSay) sayToFile(ctx context.Context, word string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	defer os.Remove(tmp)
+
 	err = ToMp3(ctx, tmp, file)
 	if err != nil {
 		return "", err
 	}
-	os.Remove(tmp)
 	return file, nil
 }
 
-func (m macSay) SayToFile(ctx context.Context, file string, word string) error {
-	f, err := m.sayToFile(ctx, word)
-	if err != nil {
-		return err
-	}
-	return os.Link(f, file)
+func (m macSay) Cache(ctx context.Context, word string) (string, error) {
+	return m.cache(ctx, word)
 }
 
 func (m macSay) Say(ctx context.Context, word string) error {
-	f, err := m.sayToFile(ctx, word)
+	f, err := m.cache(ctx, word)
 	if err != nil {
 		return err
 	}

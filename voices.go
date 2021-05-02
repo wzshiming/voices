@@ -13,7 +13,7 @@ type Voice interface {
 	Language() string
 	Detail() string
 	Say(ctx context.Context, word string) error
-	SayToFile(ctx context.Context, file string, word string) error
+	Cache(ctx context.Context, word string) (string, error)
 }
 
 type Opt func(opt *voicesOpt)
