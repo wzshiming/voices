@@ -31,7 +31,7 @@ func init() {
 		fmt.Fprintf(w, "Voices:\n")
 		helpful()
 		fmt.Fprintf(w, "    %s [Options] {text}\n", os.Args[0])
-		fmt.Fprintf(w, "    %s -voice Xiaoxiao Hello world\n", os.Args[0])
+		fmt.Fprintf(w, "    %s -v Xiaoxiao Hello world\n", os.Args[0])
 		fmt.Fprintf(w, "Usage of %s:\n", os.Args[0])
 		flag.PrintDefaults()
 	}

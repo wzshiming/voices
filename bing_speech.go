@@ -1,44 +1,47 @@
 package voices
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
-	"github.com/wzshiming/requests"
-	"golang.org/x/net/websocket"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
 
 const (
 	ua                 = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36 Edg/87.0.664.66`
+	origin             = `"chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"`
 	trustedClientToken = `6A5AA1D4EAFF4E9FB37E23D68491D6F4`
 	listUrl            = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=` + trustedClientToken
 	speechUrl          = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=` + trustedClientToken
+	voiceFormat        = "audio-24khz-48kbitrate-mono-mp3"
+)
+
+var (
+	header = http.Header{
+		"Origin":     {origin},
+		"User-Agent": {ua},
+	}
 )
 
 var bing *bingSayVoices
 
 func BingSayVoices() Voices {
 	if bing == nil {
-		bing = &bingSayVoices{
-			req: requests.NewClient().
-				SetLogLevel(requests.LogIgnore).
-				SetCache(requests.FileCacheDir(cacheDir)).
-				NewRequest().
-				SetUserAgent(ua),
-		}
+		bing = &bingSayVoices{}
 	}
 	return bing
 }
 
 type bingSayVoices struct {
-	req    *requests.Request
 	voices []Voice
 }
 
@@ -73,12 +76,23 @@ func (m *bingSayVoices) getVoices() ([]Voice, error) {
 	if m.voices != nil {
 		return m.voices, nil
 	}
-	resp, err := m.req.Get(listUrl)
+
+	req, err := http.NewRequest(http.MethodGet, listUrl, nil)
 	if err != nil {
 		return nil, err
 	}
+
+	req.Header = header
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
 	list := []bingSayItem{}
-	err = json.Unmarshal(resp.Body(), &list)
+
+	err = json.NewDecoder(resp.Body).Decode(&list)
 	if err != nil {
 		return nil, err
 	}
@@ -117,31 +131,62 @@ func (m bingSay) Detail() string {
 }
 
 func (m *bingSay) sayReader(ctx context.Context, word string) (io.ReadCloser, error) {
-	conn, err := websocket.Dial(speechUrl, "", "https://www.bing.com/")
+	dl := websocket.Dialer{
+		EnableCompression: true,
+	}
+
+	conn, resp, err := dl.DialContext(ctx, speechUrl, header)
+	if err != nil {
+		if resp == nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %s", err, resp.Status)
+	}
+
+	r, w := io.Pipe()
+
+	go func() {
+		for {
+			messageType, p, err := conn.ReadMessage()
+			if err != nil {
+				w.CloseWithError(err)
+				return
+			}
+
+			if messageType == websocket.BinaryMessage {
+				index := strings.Index(string(p), "Path:audio")
+				data := []byte(string(p)[index+12:])
+				_, err := w.Write(data)
+				if err != nil {
+					w.CloseWithError(err)
+					return
+				}
+			} else if messageType == websocket.TextMessage && string(p)[len(string(p))-14:len(string(p))-6] == "turn.end" {
+				w.Close()
+				return
+			}
+		}
+	}()
+
+	ssml := buildSSML(word, m.bingSayItem.Name)
+
+	t := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	uuid := uuid.NewString()
+	cfgMsg := "X-Timestamp:" + t + "\r\nContent-Type:application/json; charset=utf-8\r\n" + "Path:speech.config\r\n\r\n" +
+		`{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"` + voiceFormat + `"}}}}`
+
+	err = conn.WriteMessage(websocket.TextMessage, []byte(cfgMsg))
 	if err != nil {
 		return nil, err
 	}
-	if deadline, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(deadline)
-	}
-	const head = "Content-Type:application/json; charset=utf-8\r\n\r\nPath:speech.config\r\n\r\n{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"true\"},\"outputFormat\":\"audio-24khz-160kbitrate-mono-mp3\"}}}}\r\n"
-	var body = "X-RequestId:fe83fbefb15c7739fe674d9f3e81d38f\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'><voice  name='" + m.bingSayItem.Name + "'><prosody pitch='+0Hz' rate ='+0%' volume='+0%'>" + html.EscapeString(word) + "</prosody></voice></speak>\r\n"
-	_, err = conn.Write([]byte(head))
-	if err != nil {
-		return nil, err
-	}
-	_, err = conn.Write([]byte(body))
+	msg := "Path: ssml\r\nX-RequestId: " + uuid + "\r\nX-Timestamp: " + t + "\r\nContent-Type: application/ssml+xml\r\n\r\n" + ssml
+
+	err = conn.WriteMessage(websocket.TextMessage, []byte(msg))
 	if err != nil {
 		return nil, err
 	}
 
-	return struct {
-		io.Reader
-		io.Closer
-	}{
-		Reader: newBindStream(ctx, conn),
-		Closer: conn,
-	}, nil
+	return r, nil
 }
 
 func (m bingSay) cache(ctx context.Context, word string) (string, error) {
@@ -212,40 +257,19 @@ type bingSayItem struct {
 	Status         string
 }
 
-type bingStream struct {
-	ctx context.Context
-	r   io.Reader
-}
+const ssmlTemplate = `
+<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xmlns:emo="http://www.w3.org/2009/10/emotionml" version="1.0" xml:lang="en-US">
+    <voice name="{voiceName}">
+      	<prosody rate="0%" pitch="0%">
+			{text}
+      	</prosody >
+    </voice >
+</speak >`
 
-func newBindStream(ctx context.Context, r io.Reader) io.Reader {
-	return &bingStream{
-		ctx: ctx,
-		r:   r,
-	}
-}
+func buildSSML(text, voiceName string) string {
+	text = html.EscapeString(text)
 
-func (b *bingStream) Read(p []byte) (n int, err error) {
-	err = b.ctx.Err()
-	if err != nil {
-		return 0, err
-	}
-	n, err = b.r.Read(p)
-	if err != nil {
-		return 0, err
-	}
-	if n > 2 && p[0] == 0 {
-		o := p[:n]
-		if o[1] == 128 {
-			if bytes.Contains(o, []byte("Content-Type:audio/mpeg\r\n")) {
-				sl := []byte("Path:audio\r\n")
-				i := bytes.Index(o, sl)
-				tmp := o[i+len(sl) : n]
-				n = copy(o, tmp)
-				return n, nil
-			}
-		} else if o[1] == 103 {
-			return 0, io.EOF
-		}
-	}
-	return b.Read(p)
+	r := strings.ReplaceAll(ssmlTemplate, "{text}", text)
+	r = strings.ReplaceAll(r, "{voiceName}", voiceName)
+	return r
 }
