@@ -2,6 +2,8 @@ package voices
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -17,12 +19,12 @@ import (
 )
 
 const (
-	ua                 = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36 Edg/87.0.664.66`
-	origin             = `"chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"`
-	trustedClientToken = `6A5AA1D4EAFF4E9FB37E23D68491D6F4`
-	listUrl            = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=` + trustedClientToken
-	speechUrl          = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=` + trustedClientToken
-	voiceFormat        = "audio-24khz-48kbitrate-mono-mp3"
+	ua                  = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36 Edg/87.0.664.66`
+	origin              = `"chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"`
+	trustedClientToken  = `6A5AA1D4EAFF4E9FB37E23D68491D6F4`
+	listUrl             = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=` + trustedClientToken
+	voiceFormat         = "audio-24khz-48kbitrate-mono-mp3"
+	chromiumFullVersion = "130.0.2849.68"
 )
 
 var (
@@ -134,6 +136,8 @@ func (m *bingSay) sayReader(ctx context.Context, word string) (io.ReadCloser, er
 	dl := websocket.Dialer{
 		EnableCompression: true,
 	}
+
+	speechUrl := fmt.Sprintf(`wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=%s&Sec-MS-GEC=%s&Sec-MS-GEC-Version=%s`, trustedClientToken, generateSecMsGec(trustedClientToken), "1-"+chromiumFullVersion)
 
 	conn, resp, err := dl.DialContext(ctx, speechUrl, header)
 	if err != nil {
@@ -272,4 +276,37 @@ func buildSSML(text, voiceName string) string {
 	r := strings.ReplaceAll(ssmlTemplate, "{text}", text)
 	r = strings.ReplaceAll(r, "{voiceName}", voiceName)
 	return r
+}
+
+// Generates the Sec-MS-GEC token value.
+// This function generates a token value based on the current time in Windows file time format
+// adjusted for clock skew, and rounded down to the nearest 5 minutes. The token is then hashed
+// using SHA256 and returned as an uppercased hex digest.
+const (
+	winEpochOffset = 11644473600 // Windows epoch offset in seconds (1601 to 1970)
+	sToNs          = 1000000000  // Seconds to nanoseconds conversion
+)
+
+func generateSecMsGec(edgeAPIToken string) string {
+	// Get current time in seconds
+	ticks := time.Now().Unix()
+
+	// Switch to Windows file time epoch (1601-01-01 00:00:00 UTC)
+	ticks += winEpochOffset
+
+	// Round down to the nearest 5 minutes (300 seconds)
+	ticks -= ticks % 300
+
+	// Convert the ticks to 100-nanosecond intervals (Windows file time format)
+	ticks *= sToNs / 100
+
+	// Create the string to hash
+	strToHash := fmt.Sprintf("%d%s", ticks, edgeAPIToken)
+
+	// Compute SHA256 hash
+	h := sha256.New()
+	h.Write([]byte(strToHash))
+
+	// Return uppercased hex digest
+	return strings.ToUpper(hex.EncodeToString(h.Sum(nil)))
 }
