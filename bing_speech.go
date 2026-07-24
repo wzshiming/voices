@@ -19,18 +19,22 @@ import (
 )
 
 const (
-	ua                  = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36 Edg/87.0.664.66`
-	origin              = `"chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold"`
+	ua                  = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0`
+	origin              = `chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold`
 	trustedClientToken  = `6A5AA1D4EAFF4E9FB37E23D68491D6F4`
-	listUrl             = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=` + trustedClientToken
 	voiceFormat         = "audio-24khz-48kbitrate-mono-mp3"
-	chromiumFullVersion = "130.0.2849.68"
+	chromiumFullVersion = "143.0.3650.75"
 )
 
 var (
 	header = http.Header{
-		"Origin":     {origin},
-		"User-Agent": {ua},
+		"Origin":                {origin},
+		"User-Agent":            {ua},
+		"Pragma":                {"no-cache"},
+		"Cache-Control":         {"no-cache"},
+		"Sec-WebSocket-Version": {"13"},
+		"Accept-Encoding":       {"gzip, deflate, br, zstd"},
+		"Accept-Language":       {"en-US,en;q=0.9"},
 	}
 )
 
@@ -78,6 +82,8 @@ func (m *bingSayVoices) getVoices() ([]Voice, error) {
 	if m.voices != nil {
 		return m.voices, nil
 	}
+
+	listUrl := fmt.Sprintf(`https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=%s`, trustedClientToken)
 
 	req, err := http.NewRequest(http.MethodGet, listUrl, nil)
 	if err != nil {
@@ -208,7 +214,7 @@ func (m bingSay) cache(ctx context.Context, word string) (string, error) {
 	}
 	defer r.Close()
 
-	tmp := file + ".tmp"
+	tmp := file + ".wav"
 
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
